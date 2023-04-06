@@ -15,4 +15,4 @@ class Pet(models.Model):
         choices = GenderChoices.choices,
         default = GenderChoices.DEFAULT
     )
-    group = models.ForeignKey("groups.Group", on_delete=models.PROTECT, related_name="pet")
+    group = models.ForeignKey("groups.Group", on_delete=models.PROTECT, related_name="pets")
