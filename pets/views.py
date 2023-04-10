@@ -67,3 +67,87 @@ class PetView(APIView, PageNumberPagination):
         response_info["traits"] = TraitSerializer(trait_list_appended, many=True).data
 
         return Response(response_info, status.HTTP_201_CREATED)
+    
+class PetByIdView(APIView):
+    def get(self, request: Request, pet_id):
+        find_pet = Pet.objects.filter(id=pet_id).first()
+        if not find_pet:
+            return Response({"detail": "Not found."}, status.HTTP_404_NOT_FOUND)
+        pet_model = model_to_dict(find_pet)
+        
+        find_group = Group.objects.filter(id=model_to_dict(find_pet)["group"]).first()
+        pet_model["group"] = model_to_dict(find_group)
+        pet_model["group"]["created_at"] = find_group.created_at
+
+        find_traits = Trait.objects.filter(pets=pet_id)
+        if len(find_traits):
+            pet_model["traits"] = [model_to_dict(trait) for trait in find_traits]
+        else:
+            pet_model["traits"] = []
+        
+        return Response(pet_model, status.HTTP_200_OK)
+
+    def delete(self, request: Request, pet_id):
+        find_pet = Pet.objects.filter(id=pet_id)
+        if not find_pet:
+            return Response({"detail": "Not found."}, status.HTTP_404_NOT_FOUND)
+        
+        find_pet.delete()
+        return Response(None, status.HTTP_204_NO_CONTENT)
+    
+    def patch(self, request: Request, pet_id):
+        find_pet = Pet.objects.filter(id=pet_id).first()
+        if not find_pet:
+            return Response({"detail": "Not found."}, status.HTTP_404_NOT_FOUND)
+        
+        serialize = PetSerializer(data=request.data, partial=True)
+        serialize.is_valid(raise_exception=True)
+        serialized_data = dict(serialize.validated_data)
+        
+        if serialized_data["group"]:
+            pet_group = dict((serialized_data).pop("group"))
+            find_group = Group.objects.filter(scientific_name=pet_group["scientific_name"]).first()
+            if not find_group:
+                group_items = Group.objects.create(**pet_group)
+                serialized_data["group"] = group_items
+                pet_group = model_to_dict(group_items)
+            else:
+                group_to_dict = model_to_dict(find_group)
+                for key, value in group_to_dict.items():
+                    setattr(find_group, key, value)
+                serialized_data["group"] = find_group
+                pet_group = model_to_dict(find_group)
+
+        # if serialized_data["traits"]:
+        #     trait_list = []
+        #     pet_trait = (serialized_data).pop("traits")
+        #     for trait in pet_trait:
+        #         trait_dict = dict(trait)
+        #         find_trait = Trait.objects.filter(name=trait_dict["name"]).first()
+        #         if not find_trait:
+        #             trait_items = Trait.objects.create(**trait_dict)
+        #             trait_list.append(model_to_dict(trait_items))
+        #         else:
+        #             trait_list.append(model_to_dict(trait_items))
+
+        for key, value in serialized_data.items():
+            setattr(find_pet, key, value)
+
+        find_pet.save()
+
+        returning_dict = model_to_dict(find_pet)
+        returning_dict["group"] = pet_group
+        
+        return Response(returning_dict, status.HTTP_200_OK)
+    
+    
+class PetByTraitView(APIView, PageNumberPagination):
+    def get(self, request: Request, pet_trait):
+        find_trait = Trait.objects.filter(name=pet_trait)
+        if not find_trait:
+            return Response({"detail": "Not found."}, status.HTTP_404_NOT_FOUND)
+        
+        result_page = self.paginate_queryset(model_to_dict(find_trait[0])["pets"], request, view=self)
+        serializer = TraitSerializer(result_page, many=True)
+
+        return self.get_paginated_response(serializer.data)
