@@ -4,6 +4,7 @@ from rest_framework.views import APIView, Request, Response, status
 from pets.serializer import PetSerializer
 from pets.models import Pet
 from groups.models import Group
+from groups.serializer import GroupSerializer
 from traits.models import Trait
 from traits.serializer import TraitSerializer
 from rest_framework.pagination import PageNumberPagination
@@ -13,12 +14,18 @@ class PetView(APIView, PageNumberPagination):
     def get(self, request: Request):
         dict_response = {}
 
-        dict_response["count"] = Pet.objects.count()
-        all_pets = Pet.objects.all()
-        result_page = self.paginate_queryset(all_pets, request, view=self)
-        serializer = PetSerializer(result_page, many=True)
-
-        return self.get_paginated_response(serializer.data)
+        if not request.query_params.get("trait"):
+            dict_response["count"] = Pet.objects.count()
+            all_pets = Pet.objects.all()
+            result_page = self.paginate_queryset(all_pets, request, view=self)
+            serializer = PetSerializer(result_page, many=True)
+            return self.get_paginated_response(serializer.data)
+        else:
+            find_trait = Trait.objects.filter(name=request.query_params.get("trait")).first()
+            dict_trait = model_to_dict(find_trait)
+            result_page = self.paginate_queryset(dict_trait["pets"], request, view=self)
+            serializer = PetSerializer(result_page, many=True)
+            return self.get_paginated_response(serializer.data)
     
     def post(self, request: Request):
         serialized = PetSerializer(data=request.data)
@@ -41,6 +48,10 @@ class PetView(APIView, PageNumberPagination):
             response_info["group"] = group_items
         else:
             response_info["group"] = group_items
+            
+        if not find_pet:
+            created_pet = Pet.objects.create(**response_info)
+            response_info = model_to_dict(created_pet)
 
         trait_list_appended = []
         for trait in traits_key:
@@ -54,11 +65,7 @@ class PetView(APIView, PageNumberPagination):
                 trait_model_translate = model_to_dict(trait_item)
                 trait_model_translate["created_at"] = trait_item.created_at
                 trait_list_appended.append(trait_model_translate)
-
-
-        if not find_pet:
-            created_pet = Pet.objects.create(**response_info)
-            response_info = model_to_dict(created_pet)
+            trait_item.pets.add(response_info["id"])
 
         to_dict_group = model_to_dict(group_items)
         to_dict_group["created_at"] = group_items.created_at
@@ -103,42 +110,33 @@ class PetByIdView(APIView):
         serialize = PetSerializer(data=request.data, partial=True)
         serialize.is_valid(raise_exception=True)
         serialized_data = dict(serialize.validated_data)
-        
-        if serialized_data["group"]:
+
+        if serialized_data.get("group"):
             pet_group = dict((serialized_data).pop("group"))
             find_group = Group.objects.filter(scientific_name=pet_group["scientific_name"]).first()
             if not find_group:
-                group_items = Group.objects.create(**pet_group)
-                serialized_data["group"] = group_items
-                pet_group = model_to_dict(group_items)
-            else:
-                group_to_dict = model_to_dict(find_group)
-                for key, value in group_to_dict.items():
-                    setattr(find_group, key, value)
-                serialized_data["group"] = find_group
-                pet_group = model_to_dict(find_group)
+                find_group = Group.objects.create(**pet_group)
+            find_pet.group = find_group
 
-        # if serialized_data["traits"]:
-        #     trait_list = []
-        #     pet_trait = (serialized_data).pop("traits")
-        #     for trait in pet_trait:
-        #         trait_dict = dict(trait)
-        #         find_trait = Trait.objects.filter(name=trait_dict["name"]).first()
-        #         if not find_trait:
-        #             trait_items = Trait.objects.create(**trait_dict)
-        #             trait_list.append(model_to_dict(trait_items))
-        #         else:
-        #             trait_list.append(model_to_dict(trait_items))
+        if serialized_data.get("traits"):
+            trait_list = []
+            pet_trait = (serialized_data).pop("traits")
+            for trait in pet_trait:
+                trait_dict = dict(trait)
+                find_trait = Trait.objects.filter(name__iexact=trait_dict["name"]).first()
+                if not find_trait:
+                    find_trait = Trait.objects.create(**trait_dict)
+                trait_list.append(find_trait)
+            find_pet.traits.set(trait_list)
 
         for key, value in serialized_data.items():
             setattr(find_pet, key, value)
 
         find_pet.save()
 
-        returning_dict = model_to_dict(find_pet)
-        returning_dict["group"] = pet_group
-        
-        return Response(returning_dict, status.HTTP_200_OK)
+        returning_dict = PetSerializer(find_pet)
+
+        return Response(returning_dict.data, status.HTTP_200_OK)
     
     
 class PetByTraitView(APIView, PageNumberPagination):
